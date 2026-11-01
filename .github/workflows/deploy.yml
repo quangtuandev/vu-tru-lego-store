@@ -1,0 +1,71 @@
+name: CI/CD — Cloudflare Pages + D1 (SQLite)
+
+on:
+  push:
+    branches:
+      - main
+      - feat/cloudflare-d1-sqlite
+    paths:
+      - 'vu-tru-lego-cloud/**'
+      - '.github/workflows/deploy.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'vu-tru-lego-cloud/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test D1 SQLite Functions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run SQLite integration tests
+        run: node vu-tru-lego-cloud/test-d1.mjs
+
+  deploy:
+    name: Deploy to Cloudflare Pages
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vu-tru-lego-cloud
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Check Cloudflare Secrets
+        id: check_secrets
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Chưa cấu hình CLOUDFLARE_API_TOKEN hoặc CLOUDFLARE_ACCOUNT_ID trong GitHub Actions Secrets — bỏ qua bước deploy tự động."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply D1 SQLite Schema (idempotent)
+        if: steps.check_secrets.outputs.skip == 'false'
+        run: npx --yes wrangler d1 execute vu-tru-lego-db --remote --file=./schema.sql -y
+
+      - name: Deploy to Cloudflare Pages
+        if: steps.check_secrets.outputs.skip == 'false'
+        run: npx --yes wrangler pages deploy public --project-name=vu-tru-lego --branch=main --commit-dirty=true
